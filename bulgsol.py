@@ -2,11 +2,10 @@ import io
 import pstats
 import cProfile
 import random
+import time
 
-from partition import Partition, PartitionGenerator
+from partition import accel_asc
 from partition_util import partitionfun
-
-
 
 # class BulgarianSolitairePath():
 #     def __init__(self):
@@ -20,43 +19,76 @@ from partition_util import partitionfun
 
 
 class BulgarianSolitaire():
-    def __init__(self, start_position):
-        self.position = start_position
+    # Types of data to collect
+    # LEVEL_SIZE = 0
+    # CYCLE = 0
 
-        # List of partitions encountered during play, represented as strings
-        self.path = list()
+    def __init__(self):
+        pass
+        # self.data_to_collect = []
 
-        # dict with position string as key and number of steps to cycle as value
-        self.nsteps_to_cycle = dict()
+        # Dict with position string as key and number of steps to cycle as value
+        self.level_sizes = dict()
 
-    def play_until_first_recurrence(self):
-        self.path.append(self.position.to_tuple())
+    # def add_data_to_collect(self, data):
+    #     self.data_to_collect.append(data)
+
+    def play_until_first_recurrence(self, start_position, start_position_key):
+        position = start_position
+        p_key = start_position_key
+
+        if p_key in self.level_sizes:  # Already been here in the game graph
+            return self.level_sizes[p_key]
+
+        # List of partitions encountered during play, represented as tuples
+        path = [p_key]
 
         done = False
-        while not done:
-            self.position.bulgarian_solitaire_step()
-            p_tuple = self.position.to_tuple()
-            done = (p_tuple in self.path)
-            if not done:
-                self.path.append(p_tuple)
+        while True:  # not done:
+            position.bulgarian_solitaire_step()
+            p_key = position.to_key()
 
-        # Create nsteps_to_cycle: When p_tuple found in
-        # self.path, start incrementing number of steps to cycle
+            done = (p_key in self.level_sizes)  # Already been here in the game graph
+            if done:
+                return self.generate_level_sizes_from_already_visited(path, p_key)
+
+            self.level_sizes[p_key] = 0  # this will be set to non-0 in generate_level_sizes_from_already_visited
+
+            done = (p_key in path)  # Found a recurring position
+            if not done:
+                path.append(p_key)
+            else:
+                return self.compute_nsteps_to_cycle(path, p_key)
+
+    def has_played(self, p_key):
+        return p_key in self.level_sizes
+
+    def generate_level_sizes_from_already_visited(self, path, p_key):
+        cnt = self.level_sizes[p_key]
+        for i in reversed(range(len(path))):
+            cnt += 1
+            self.level_sizes[path[i]] = cnt
+        return cnt
+
+
+    def compute_nsteps_to_cycle(self, path, first_recurrence):
+        # When first_recurrence found in path, start incrementing number of steps to cycle
         cnt = 0
         found = False
-        for i in reversed(range(len(self.path))):
-            self.nsteps_to_cycle[self.path[i]] = cnt
+        for p_key in reversed(path):
+            self.level_sizes[p_key] = cnt
             if not found:
-                found = (self.path[i] == p_tuple)
+                found = (p_key == first_recurrence)
             if found:
                 cnt += 1
-
+        return cnt - 1
 
 def mkhist(d):
     all_vals = list(d.values())
-    out = list()
-    for i in range(0, max(all_vals) + 1):
-        out.append(all_vals.count(i))
+    maxval = max(all_vals)
+    out = [0] * (maxval + 1)
+    for val in all_vals:
+        out[val] += 1
     return out
 
 
@@ -65,36 +97,63 @@ def mkhist(d):
 #     p = Partition([1] * n)
 #     bs = BulgarianSolitaire(p)
 #     bs.play_until_first_recurrence()
-#     h = mkhist(bs.nsteps_to_cycle)
+#     h = mkhist(bs.level_size)
+
 
 if __name__ == "__main__":
 
+    # # Speed test of accel_gen
+    # for n in range(10, 11):
+    #     tic = time.time()
+    #     gen = accel_asc(n)
+    #     for p in gen:
+    #         print(p)
+    #     toc = time.time()
+    #     print(f"n = {n}: Elapsed time = {toc - tic}")
+
+    # print()
+
+    # # Speed test of PartitionGenerator
+    # for n in range(10, 11):
+    #     tic = time.time()
+    #     gen = PartitionGenerator(n)
+    #     while (gen.has_next()):
+    #         p = gen.get_next()
+    #         print(p)
+    #     toc = time.time()
+    #     print(f"n = {n}: Elapsed time = {toc - tic}")
+
+
     pr = cProfile.Profile()
     pr.enable()
+    tic = time.time()
 
-    for i in range(8, 17):
-        n = int(i * (i + 1) / 2)
+    for k in [10]:  # 10, 11, 12, 13, 14, 15, 16]:
+        n = int(k * (k + 1) / 2)
         n_partitions = partitionfun(n)
-        pg = PartitionGenerator(n)
-        n_steps_to_cycle = dict()
-        partitions_done = list()
-        while (pg.has_next()):
-            p = pg.get_next()
-            if random.random() < 0.01:
-                r = round(len(partitions_done) / n_partitions * 1000000) / 10000
-                print(f"{i} {n} ({n_partitions}): {r} %   ", end = "\r")
-            p_tuple = p.to_tuple()
-            if (p_tuple not in partitions_done):
-                bs = BulgarianSolitaire(p)
-                bs.play_until_first_recurrence()
-                n_steps_to_cycle.update(bs.nsteps_to_cycle)
-                for pdone in bs.nsteps_to_cycle:
-                    if pdone not in partitions_done:
-                        partitions_done.append(pdone)
-       
-        h = mkhist(n_steps_to_cycle)
-        print(f"{i}: {h[0:11]}...")
+        pg = accel_asc(n)
+        bs = BulgarianSolitaire()
+        # h = [0] * (2 + k * (k - 1))  # Max number of steps
+        cnt = 0
+        for p in pg:
+            # print(f"p = {p.nparts}")
+            if bs.has_played(p):
+                continue
+            p_key = p.to_key()
+            cnt += 1
+            if cnt % 10000 == 0:  # random.random() < 0.001:
+                r = round(cnt / n_partitions * 1000000) / 10000
+                print(f"{k} {n} ({n_partitions}): {r} %   ", end = "\r")
+            n_steps = bs.play_until_first_recurrence(p, p_key)
+            # print(f" {n_steps} moves")
+            # h[n_steps] += 1
 
+        # print(f"{k}: {h[0: 11]}...")
+        h = mkhist(bs.level_sizes)
+        print(f"{k}: {h[0:11]}...")
+
+    toc = time.time()
+    print(f"This took {(toc - tic)}")
     pr.disable()
     s = io.StringIO()
     ps = pstats.Stats(pr, stream=s).sort_stats(pstats.SortKey.CUMULATIVE)
