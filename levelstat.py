@@ -3,6 +3,11 @@ from sympy import Symbol, series, Poly
 from itertools import permutations
 from partition import Partition
 from partition_util import partitionfun
+from scipy.sparse import lil_matrix
+
+from treeplot import treeplot
+import matplotlib.pyplot as plt
+
 
 def triangular_number(ind):
     return ind * (ind + 1) // 2
@@ -34,8 +39,8 @@ def is_canonical_necklace(necklace):
 def coeff_of_ratfun(A, B, ind, mult_by_1_minus_x=False):
     '''
     Returns the coefficients up to and including ind in the series expansion of
-    the rational function A/B. 
-    
+    the rational function A/B.
+
     Example usage:
     A = [1, -1]  # Represents 1 - x
     B = [1, -3, 1]  # Represents 1 - 3x + x^2
@@ -44,11 +49,11 @@ def coeff_of_ratfun(A, B, ind, mult_by_1_minus_x=False):
     print(f"The first {i + 2} coefficients of the series expansion of A/B is: {result}")
     '''
     x = Symbol('x')
-    
+
     # Create polynomials from coefficient lists
     poly_A = Poly(A[::-1], x)
     poly_B = Poly(B[::-1], x)
-    
+
     # Compute the series expansion of A / B up to x^i
     if mult_by_1_minus_x:
         C = [1, -1]  # 1-x
@@ -56,15 +61,15 @@ def coeff_of_ratfun(A, B, ind, mult_by_1_minus_x=False):
         ratfun = poly_C.as_expr() * poly_A.as_expr() / poly_B.as_expr()
     else:
         ratfun = poly_A.as_expr() / poly_B.as_expr()
-    
+
     series_expansion = ratfun.series(x, 0, ind+1)
-    
+
     # Extract the coefficients up to ind
     out = []
     for i in range(ind + 1):
         coeff = series_expansion.coeff(x, i)
         out.append(coeff)
-    
+
     return out
 
 
@@ -118,6 +123,9 @@ def get_reversed_playable_out_of_cycle(cycle_partitions):
     '''
     Return the partitions in the specified list that leads out of the
     cycle when played backwards.
+
+    @return List of tuples. Each tuple is
+    (partition_in_cycle, playable_row, index_to_cycle_partitions)
     '''
     partitions_out = []
 
@@ -131,16 +139,59 @@ def get_reversed_playable_out_of_cycle(cycle_partitions):
     return partitions_out
 
 
-def level_stat_orbit(necklace):
+class AdjMatrix():
+    def __init__(self):
+        # A list of lists, first index is row, second column
+        self.matrix = list()
+    
+    def add(self, row, to_append):
+        curr_len = len(self.matrix)
+        if row >= curr_len:
+            for _ in range(curr_len, row + 1):
+                self.matrix.append(list())
+        self.matrix[row].append(to_append)
+
+    def max(self):
+        matrix_max = -1
+        for x in self.matrix:
+            for xx in x:
+                matrix_max = max(xx, matrix_max)
+        return matrix_max
+
+    def to_sparse(self):
+        matrix_max = self.max()
+        curr_len = len(self.matrix)
+        if curr_len < matrix_max:
+            for _ in range(curr_len, matrix_max):
+                self.matrix.append(list())
+
+        n = len(self.matrix)
+        assert(matrix_max == n), f"{matrix_max=}, {n=}"
+
+        sparse = lil_matrix((n + 1, n + 1))
+        # sparse = [[0] * (n + 1) for _ in range(n + 1)]
+        for row in range(len(self.matrix)):
+            cols = self.matrix[row]
+            for col in cols:
+                # sparse[row][col] = 1
+                sparse[row, col] = 1
+        return sparse
+
+
+def level_stat_orbit(necklace, depth=None):
     '''
     In the orbit with the cycle represented as the specified necklace, return
-    the number of partitions with k steps to reach the cycle, for each k.
+    the number of partitions with k steps to reach the cycle, for each k=0,...,depth.
+    If depth is None or not specified, the entire orbit is returned.
     '''
-    out = list()
+    level_sizes = list()
+    adj_matrix = AdjMatrix()
+
+    node = 0
 
     # Level 0 - the cycle partitions
     cycle_partitions = get_partitions_from_necklace(necklace)
-    out.append(len(cycle_partitions))
+    level_sizes.append(len(cycle_partitions))
 
     # Level 1 - the first level out of cycle
     partitions = get_reversed_playable_out_of_cycle(cycle_partitions)
@@ -148,24 +199,36 @@ def level_stat_orbit(necklace):
     for partition, part_ind in partitions:
         partition_rev = partition.copy()
         partition_rev.reversed_bulgarian_solitaire_step(part_ind)
-        curr_level.append(partition_rev)
-    out.append(len(curr_level))
+        node += 1
+        curr_level.append((partition_rev, node))
+        adj_matrix.add(0, node)
+    level_sizes.append(len(curr_level))
 
     # Main loop - levels 2, 3, ...
+    level_cnt = 2
     next_level = []
     done = False
     while not done:
-        for partition in curr_level:
+        for partition, node_ind in curr_level:
             rev_img, _ = partition.reversed_image()
-            next_level.extend(rev_img)
+            
+            # next_level.extend(rev_img)
+            for p in rev_img:
+                node += 1
+                next_level.append((p, node))
+                adj_matrix.add(node_ind, node)
+
         level_size = len(next_level)
         done = (level_size == 0)
         if not done:
-            out.append(level_size)
+            level_sizes.append(level_size)
             curr_level = next_level
             next_level = []
+            level_cnt += 1
+            done = (level_cnt == depth)  # Stop if we reached the specified depth
 
-    return out
+    m = max([max(x) for x in adj_matrix.matrix if len(x) > 0])
+    return level_sizes, adj_matrix.to_sparse()
 
 
 def level_stat(n):
@@ -186,72 +249,52 @@ def level_stat(n):
 
     return levels
 
+def levelstat_plot(levels, ax, bar_max=None):
+    x = [str(i) for i in range(len(levels))]
+    ax.bar(x, levels)  #, label=bar_labels)  # , color=bar_colors)
+    ax.set_xlabel('number of partitions')
+    ax.set_ylabel('distance to cycle')
+    if bar_max is not None:
+        ax.set_ylim([0, bar_max + 1])
 
-necklace_base = 'BW'
-for k in range(1, 10):
-    necklace = necklace_base * k
-    # necklace1 = 'W' * k
-    levels = level_stat_orbit(necklace)
-    print(necklace)
-    print(levels)
+# Test of treeplot
 
-    # necklace2 = 'W' + 'BW' * k
-    # levels2 = level_stat_orbit(necklace2)
-    # print(levels2)
-   
-    print()
+# necklace_base = 'BBWW'
+# necklace_base = 'W'
 
-#A = [-5, -7, -12, -16, -9, 8, 1]
-#B = [-1, 0, 0, 1, 4, 6]
-A = [2, 1, -3]
-B = [1, -1, -3, 1]
-ind = 9
-result = coeff_of_ratfun(A, B, ind, mult_by_1_minus_x=True)
-print(f"The first {ind + 1} coefficients: {result}")
+# k_start = 4
+# k_end = 8
 
+# n_subplots = k_end - k_start + 1
+# fig, axes = plt.subplots(1, n_subplots, figsize=(15, 8))
+# axi = 0
+# for k in range(k_start, k_end + 1):
+#     necklace = necklace_base * k
+#     # necklace1 = 'W' * k
+#     levels, adj_matrix = level_stat_orbit(necklace, depth=5)
+#     print(necklace)
+#     print(levels)
+#     treeplot(adj_matrix, ax=axes[axi])
+#     axi += 1
+#     print()
+# plt.show()
 
-# for n in range(3, 50):
-#     levels = level_stat(n)
-#     sum1 = sum([sum(levels[k]) for k in levels])
-#     n_partitions = partitionfun(n)
-#     assert(n_partitions == sum1)
-#     n_cycles = len(levels)
-#     cycles_per_partitions = n_cycles / n_partitions
-#     print(f"{n=}, {n_partitions=}, {n_cycles}, {cycles_per_partitions}")
+k = 3
+necklace = "BWWBWWW" * k
+depth = 30
+levels, _ = level_stat_orbit(necklace, depth=depth)
+print(levels)
 
-
-
-
-
-
-import numpy as np
-
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
-from matplotlib.animation import FFMpegWriter
-
-# Fixing random state for reproducibility
-np.random.seed(19680801)
+A = [-7, -10, -18, -33, -53, -54, -12, 23, 2]
+B = [-1, 0, 0, 0, 1, 6, 14, 12]
+result = coeff_of_ratfun(A, B, depth - 1, mult_by_1_minus_x=True)
+print(f"The first {depth + 1} coefficients:\n{result}")
 
 
-metadata = dict(title='Movie Test', artist='Matplotlib',
-                comment='Movie support!')
-writer = FFMpegWriter(fps=15, metadata=metadata)
+# Test of coeff_of_ratfun
 
-fig = plt.figure()
-l, = plt.plot([], [], 'k-o')
-
-plt.xlim(-5, 5)
-plt.ylim(-5, 5)
-
-x0, y0 = 0, 0
-
-with writer.saving(fig, "writer_test.mp4", 100):
-    for i in range(100):
-        x0 += 0.1 * np.random.randn(10)
-        y0 += 0.1 * np.random.randn(10)
-        l.set_data(x0, y0)
-        writer.grab_frame()
+# A = [2, 1, -3]
+# B = [1, -1, -3, 1]
+# ind = 9
+# result = coeff_of_ratfun(A, B, ind, mult_by_1_minus_x=True)
+# print(f"The first {ind + 1} coefficients: {result}")

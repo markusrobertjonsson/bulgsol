@@ -1,5 +1,5 @@
 import networkx as nx
-
+import matplotlib.pyplot as plt
 
 def binary_tree_layout(G, root, width=1., vert_gap = 0.2, vert_loc = 0, xcenter = 0.5, 
                   pos = None, parent = None):
@@ -45,3 +45,5 @@ for node in G.nodes():
         G.nodes[node]['child_status'] = 'right' #and odd to be right
 pos = binary_tree_layout(G,0)
 nx.draw(G, pos=pos, with_labels = True)
+
+plt.show()
